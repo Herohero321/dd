@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Stock Analysis Web App</title>
+  <style>
+    * { box-sizing:border-box; margin:0; padding:0 }
+    body { background:#f0f2f5; color:#333; font-family:Arial,sans-serif;
+           display:flex; flex-direction:column; min-height:100vh; }
+    .navbar { background:#fff; padding:16px; text-align:center;
+              box-shadow:0 2px 4px rgba(0,0,0,0.1); }
+    .navbar h1 { display:inline-block; margin-right:8px; font-size:1.6rem }
+    .navbar input {
+      padding:8px; font-size:1rem; width:200px;
+      border:1px solid #ccc; border-radius:4px; margin-right:8px;
+    }
+    .btn-primary {
+      padding:8px 16px; font-size:1rem; border:none; border-radius:4px;
+      background:#007bff; color:#fff; cursor:pointer;
+    }
+    .btn-primary:hover { background:#0069d9 }
+    main { flex:1; padding:20px; display:flex; flex-direction:column;
+           align-items:center }
+    #chartdiv {
+      width:100%; max-width:960px; height:500px; background:#fff;
+      border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1);
+      overflow:hidden;
+    }
+    .controls-bottom {
+      margin-top:16px; display:flex; flex-wrap:wrap; gap:12px;
+      justify-content:center; align-items:center;
+    }
+    .controls-bottom label {
+      font-size:1rem; display:flex; align-items:center; gap:4px;
+    }
+    .metrics {
+      display:flex; gap:16px; flex-wrap:wrap; justify-content:center;
+      margin-top:20px;
+    }
+    .card {
+      background:#fff; padding:16px; border-radius:8px;
+      box-shadow:0 1px 4px rgba(0,0,0,0.1); text-align:center;
+      width:120px;
+    }
+    .card h2 { font-size:1rem; margin-bottom:8px; color:#555 }
+    .card p { font-size:1.4rem; margin:0; color:#222 }
+    @media (max-width:600px) {
+      .navbar input { width:60% }
+      .controls-bottom { flex-direction:column; gap:8px }
+      .metrics { flex-direction:column; align-items:center }
+    }
+  </style>
+  <script src="https://cdn.amcharts.com/lib/5/index.js"></script>
+  <script src="https://cdn.amcharts.com/lib/5/xy.js"></script>
+  <script src="https://cdn.amcharts.com/lib/5/themes/Animated.js"></script>
+</head>
+<body>
+
+  <header class="navbar">
+    <h1>Stock Analysis</h1>
+    <input id="symbolInput" type="text" placeholder="مثلاً AAPL" value="AAPL"/>
+    <button id="searchBtn" class="btn-primary">Search</button>
+  </header>
+
+  <main>
+    <div id="chartdiv"></div>
+
+    <div class="controls-bottom">
+      <label style="color:#28a745">
+        <input type="checkbox" id="chkClose" checked/> Close price
+      </label>
+      <label style="color:#000000">
+        <input type="checkbox" id="chkCandle"/> Candlestick
+      </label>
+      <label style="color:#888888">
+        <input type="checkbox" id="chkVolume"/> Volume
+      </label>
+      <label style="color:#ffa500">
+        <input type="checkbox" id="chkSMA" checked/> SMA(10)
+      </label>
+      <label style="color:#6f42c1">
+        <input type="checkbox" id="chkRSI"/> RSI(14)
+      </label>
+      <label style="color:#dc3545">
+        <input type="checkbox" id="chkMACD"/> MACD
+      </label>
+      <label style="color:#007bff">
+        <input type="checkbox" id="chkPred"/> Prediction
+      </label>
+    </div>
+
+    <div class="metrics">
+      <div class="card"><h2>SMA (10)</h2><p id="cardSMA">–</p></div>
+      <div class="card"><h2>RSI (14)</h2><p id="cardRSI">–</p></div>
+      <div class="card"><h2>MACD</h2><p id="cardMACD">–</p></div>
+      <div class="card"><h2>Next Price</h2><p id="cardPred">–</p></div>
+    </div>
+  </main>
+
+  <script>
+    const API_KEY = "iuaYSx6MhNpQPwKZ73n31hKZodxwaTNd";
+
+    async function fetchFMP(sym) {
+      const url = `https://financialmodelingprep.com/api/v3/historical-price-full/${encodeURIComponent(sym)}?apikey=${API_KEY}`;
+      const resp = await fetch(url);
+      const json = await resp.json();
+      if (!json.historical) throw new Error("لا توجد بيانات للسهم: " + sym);
+      return json.historical.slice(0,30).reverse().map(d=>({
+        date:d.date, open:d.open, high:d.high,
+        low:d.low, close:d.close, volume:d.volume
+      }));
+    }
+
+    function computeSMA(data,p=10){
+      return data.map((d,i,arr)=>({
+        date:d.date,
+        sma: i<p-1? null :
+             arr.slice(i-p+1,i+1).reduce((s,v)=>s+v.close,0)/p
+      }));
+    }
+    function computeRSI(data,p=14){
+      let gains=0, losses=0;
+      for(let i=1;i<=p;i++){
+        const diff=data[i].close-data[i-1].close;
+        diff>0? gains+=diff : losses-=diff;
+      }
+      let avgG=gains/p, avgL=losses/p;
+      return data.map((d,i,arr)=>{
+        if(i<p) return { date:d.date, rsi:null };
+        const diff=d.close-arr[i-1].close;
+        avgG=(avgG*(p-1)+Math.max(diff,0))/p;
+        avgL=(avgL*(p-1)+Math.max(-diff,0))/p;
+        const rs=avgG/(avgL||1);
+        return { date:d.date, rsi:100-(100/(1+rs)) };
+      });
+    }
+    function computeMACD(data,f=12,s=26){
+      const ema=(vals,n)=>{
+        const k=2/(n+1);
+        let e=vals[0], out=[e];
+        for(let i=1;i<vals.length;i++){
+          e=vals[i]*k + e*(1-k);
+          out.push(e);
+        }
+        return out;
+      };
+      const closes=data.map(d=>d.close);
+      const fast=ema(closes,f), slow=ema(closes,s);
+      return data.map((d,i)=>({ date:d.date, macd: fast[i]-slow[i] }));
+    }
+    function linReg(data){
+      const n=data.length,
+            x=data.map((_,i)=>i),
+            y=data.map(d=>d.close),
+            sx=x.reduce((a,b)=>a+b,0),
+            sy=y.reduce((a,b)=>a+b,0),
+            sxy=x.map((v,i)=>v*y[i]).reduce((a,b)=>a+b,0),
+            sxx=x.map(v=>v*v).reduce((a,b)=>a+b,0),
+            m=(n*sxy-sx*sy)/(n*sxx-sx*sx),
+            b=(sy-m*sx)/n;
+      return data.map((d,i)=>({ date:d.date, pred: b+m*i }));
+    }
+
+    let root,chart,xAxis,yAxis,
+        lineSeries,candleSeries,volumeSeries,
+        smaSeries,rsiSeries,macdSeries,predSeries;
+
+    am5.ready(function(){
+      root = am5.Root.new("chartdiv");
+      root.setThemes([ am5themes_Animated.new(root) ]);
+
+      chart = root.container.children.push(
+        am5xy.XYChart.new(root, {
+          panX:true, panY:true,
+          wheelX:"panX", wheelY:"zoomX",
+          layout:root.verticalLayout, paddingRight:20
+        })
+      );
+
+      xAxis = chart.xAxes.push(
+        am5xy.CategoryAxis.new(root, {
+          categoryField:"date",
+          renderer:am5xy.AxisRendererX.new(root,{
+            minGridDistance:25, stroke:am5.color(0x888888)
+          })
+        })
+      );
+      xAxis.get("renderer").labels.template.setAll({
+        rotation:-45, centerY:am5.p50, centerX:am5.p100,
+        fill:am5.color(0x333333)
+      });
+      xAxis.setAll({ startLocation:0, endLocation:1 });
+
+      yAxis = chart.yAxes.push(
+        am5xy.ValueAxis.new(root,{
+          renderer:am5xy.AxisRendererY.new(root,{
+            stroke:am5.color(0x888888)
+          })
+        })
+      );
+      yAxis.get("renderer").labels.template.setAll({
+        fill:am5.color(0x333333)
+      });
+
+      // Close line
+      lineSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"Close", xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"close",
+          stroke:am5.color(0x28a745), fill:am5.color(0xe6f4ea),
+          tooltip:am5.Tooltip.new(root,{ labelText:"{valueY}" })
+        })
+      );
+      lineSeries.strokes.template.setAll({ strokeWidth:3 });
+      lineSeries.fills.template.setAll({ fillOpacity:0.3 });
+      lineSeries.setAll({ startLocation:0, endLocation:1 });
+
+      // Candlestick
+      candleSeries = chart.series.push(
+        am5xy.CandlestickSeries.new(root,{
+          name:"Candlestick", xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date",
+          openValueYField:"open", highValueYField:"high",
+          lowValueYField:"low", valueYField:"close",
+          tooltip:am5.Tooltip.new(root,{ labelText:"O:{openValueY}\nH:{highValueY}\nL:{lowValueY}\nC:{valueY}" })
+        })
+      );
+      candleSeries.set("hidden", true);
+      candleSeries.setAll({ startLocation:0, endLocation:1 });
+
+      // Volume
+      volumeSeries = chart.series.push(
+        am5xy.ColumnSeries.new(root,{
+          name:"Volume", xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"volume",
+          clustered:false,
+          tooltip:am5.Tooltip.new(root,{ labelText:"{valueY}" })
+        })
+      );
+      volumeSeries.columns.template.setAll({ fill:am5.color(0x888888), fillOpacity:0.3 });
+      volumeSeries.set("hidden", true);
+
+      // SMA
+      smaSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"SMA(10)", xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"sma",
+          stroke:am5.color(0xffa500), strokeDasharray:[4,4], strokeWidth:2
+        })
+      );
+      smaSeries.setAll({ startLocation:0, endLocation:1 });
+
+      // RSI
+      rsiSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"RSI(14)", xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"rsi",
+          stroke:am5.color(0x6f42c1), strokeDasharray:[2,2], strokeWidth:2
+        })
+      );
+      rsiSeries.setAll({ startLocation:0, endLocation:1 });
+      rsiSeries.set("hidden", true);
+
+      // MACD
+      macdSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"MACD", xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"macd",
+          stroke:am5.color(0xdc3545), strokeWidth:2
+        })
+      );
+      macdSeries.setAll({ startLocation:0, endLocation:1 });
+      macdSeries.set("hidden", true);
+
+      // Prediction
+      predSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"Prediction", xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"pred",
+          stroke:am5.color(0x007bff), strokeDasharray:[3,3], strokeWidth:2
+        })
+      );
+      predSeries.setAll({ startLocation:0, endLocation:1 });
+      predSeries.set("hidden", true);
+
+      chart.set("cursor", am5xy.XYCursor.new(root,{ behavior:"zoomXY" }));
+
+      // bind checkboxes
+      document.getElementById("chkClose").addEventListener("change", function(e){
+        e.target.checked ? lineSeries.show() : lineSeries.hide();
+      });
+      document.getElementById("chkCandle").addEventListener("change", function(e){
+        e.target.checked ? candleSeries.show() : candleSeries.hide();
+      });
+      document.getElementById("chkVolume").addEventListener("change", function(e){
+        e.target.checked ? volumeSeries.show() : volumeSeries.hide();
+      });
+      document.getElementById("chkSMA").addEventListener("change", function(e){
+        e.target.checked ? smaSeries.show() : smaSeries.hide();
+      });
+      document.getElementById("chkRSI").addEventListener("change", function(e){
+        e.target.checked ? rsiSeries.show() : rsiSeries.hide();
+      });
+      document.getElementById("chkMACD").addEventListener("change", function(e){
+        e.target.checked ? macdSeries.show() : macdSeries.hide();
+      });
+      document.getElementById("chkPred").addEventListener("change", function(e){
+        e.target.checked ? predSeries.show() : predSeries.hide();
+      });
+
+      updateChart();
+    });
+
+    document.getElementById("searchBtn").addEventListener("click", updateChart);
+
+    async function updateChart(){
+      const sym = document.getElementById("symbolInput").value.trim() || "AAPL";
+      try {
+        const raw = await fetchFMP(sym);
+        xAxis.data.setAll(raw);
+        lineSeries.data.setAll(raw);
+        candleSeries.data.setAll(raw);
+        volumeSeries.data.setAll(raw);
+        smaSeries.data.setAll(computeSMA(raw,10));
+        rsiSeries.data.setAll(computeRSI(raw,14));
+        macdSeries.data.setAll(computeMACD(raw,12,26));
+        predSeries.data.setAll(linReg(raw));
+
+        // update cards
+        document.getElementById("cardSMA").textContent =
+          smaSeries.dataItems.filter(di=>di.dataContext.sma!==null).pop().dataContext.sma.toFixed(2);
+        document.getElementById("cardRSI").textContent =
+          rsiSeries.dataItems.filter(di=>di.dataContext.rsi!==null).pop().dataContext.rsi.toFixed(2);
+        document.getElementById("cardMACD").textContent =
+          macdSeries.dataItems.pop().dataContext.macd.toFixed(2);
+        document.getElementById("cardPred").textContent =
+          predSeries.dataItems.pop().dataContext.pred.toFixed(2);
+
+        // reset defaults
+        candleSeries.hide(); volumeSeries.hide();
+        smaSeries.show(); rsiSeries.hide();
+        macdSeries.hide(); predSeries.hide();
+        document.getElementById("chkClose").checked = true;
+        document.getElementById("chkCandle").checked = false;
+        document.getElementById("chkVolume").checked = false;
+        document.getElementById("chkSMA").checked = true;
+        document.getElementById("chkRSI").checked = false;
+        document.getElementById("chkMACD").checked = false;
+        document.getElementById("chkPred").checked = false;
+
+        chart.zoomOut();
+      } catch(e){
+        alert("خطأ: " + e.message);
+      }
+    }
+  </script>
+</body>
+</html>
