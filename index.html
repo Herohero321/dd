@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Stock Market Analyzer (Light Theme)</title>
+  <style>
+    /* Reset & Base */
+    * { box-sizing: border-box; margin:0; padding:0 }
+    body {
+      background: #f0f2f5; color: #333;
+      font-family: Arial, sans-serif;
+      display:flex; flex-direction:column;
+      min-height:100vh;
+    }
+    .navbar {
+      background:#fff; padding:16px;
+      text-align:center;
+      box-shadow:0 2px 4px rgba(0,0,0,0.1);
+    }
+    .navbar h1 {
+      display:inline-block; margin-right:8px;
+      font-size:1.6rem;
+    }
+    .navbar input {
+      padding:8px; font-size:1rem;
+      width:250px; max-width:80%;
+      border:1px solid #ccc; border-radius:4px;
+    }
+    .btn {
+      padding:8px 16px; font-size:1rem;
+      border:none; border-radius:4px;
+      cursor:pointer; margin:8px 4px;
+    }
+    .btn-primary { background:#007bff; color:#fff; }
+    .btn-primary:hover { background:#0069d9; }
+    .btn-secondary { background:#28a745; color:#fff; }
+    .btn-secondary:hover { background:#218838; }
+    main {
+      flex:1; padding:20px;
+      display:flex; flex-direction:column;
+      align-items:center;
+    }
+    #chartdiv {
+      width:100%; max-width:960px; height:500px;
+      background:#fff; border-radius:8px;
+      box-shadow:0 2px 6px rgba(0,0,0,0.1);
+      overflow:hidden;
+    }
+    .controls-bottom { margin-top:16px; text-align:center; }
+    @media (max-width:600px) {
+      .navbar input { width:70%; }
+      .controls-bottom .btn { margin:4px; font-size:.9rem; }
+    }
+  </style>
+
+  <!-- amCharts 5 -->
+  <script src="https://cdn.amcharts.com/lib/5/index.js"></script>
+  <script src="https://cdn.amcharts.com/lib/5/xy.js"></script>
+  <script src="https://cdn.amcharts.com/lib/5/themes/Animated.js"></script>
+</head>
+<body>
+
+  <header class="navbar">
+    <span>📈</span>
+    <h1>Stock Market Analyzer</h1>
+    <input id="symbolInput" type="text" placeholder="AAPL أو غيره" value="AAPL"/>
+    <button id="searchBtn" class="btn btn-primary">Search</button>
+  </header>
+
+  <main>
+    <div id="chartdiv"></div>
+    <div class="controls-bottom">
+      <button id="toggleChartType" class="btn btn-secondary">Toggle Candlestick</button>
+      <button id="drawSupport"     class="btn btn-secondary">Draw Support Line</button>
+      <button id="drawResistance"  class="btn btn-secondary">Draw Resistance Line</button>
+      <button id="addBuy"          class="btn btn-secondary">Add Buy Marker</button>
+      <button id="addSell"         class="btn btn-secondary">Add Sell Marker</button>
+      <button id="togglePred"      class="btn btn-secondary">Show Prediction</button>
+    </div>
+  </main>
+
+  <script>
+    // API Key
+    const API_KEY = "iuaYSx6MhNpQPwKZ73n31hKZodxwaTNd";
+
+    // Fetch last 30 days historical data
+    async function fetchFMP(symbol) {
+      const url =
+        `https://financialmodelingprep.com/api/v3/historical-price-full/` +
+        `${encodeURIComponent(symbol)}?apikey=${API_KEY}`;
+      const resp = await fetch(url);
+      const json = await resp.json();
+      if (!json.historical) throw new Error("لا توجد بيانات للسهم: " + symbol);
+      return json.historical.slice(0,30).reverse().map(d => ({
+        date: d.date, open: d.open, high: d.high,
+        low: d.low, close: d.close, volume: d.volume
+      }));
+    }
+
+    // Compute indicators
+    function computeSMA(data, p=10) {
+      return data.map((d,i,arr) => {
+        if (i < p-1) return { date:d.date, sma: null };
+        const sum = arr.slice(i-p+1,i+1).reduce((s,v)=>s+v.close,0);
+        return { date:d.date, sma: sum/p };
+      });
+    }
+    function computeRSI(data, p=14) {
+      let gains=0, losses=0;
+      for(let i=1;i<=p;i++){
+        const diff=data[i].close-data[i-1].close;
+        if(diff>0) gains+=diff; else losses-=diff;
+      }
+      let avgG=gains/p, avgL=losses/p;
+      return data.map((d,i,arr)=>{
+        if(i< p) return { date:d.date, rsi:null };
+        const diff=d.close-arr[i-1].close;
+        avgG=(avgG*(p-1)+Math.max(diff,0))/p;
+        avgL=(avgL*(p-1)+Math.max(-diff,0))/p;
+        const rs=avgG/(avgL||1);
+        return { date:d.date, rsi:100-(100/(1+rs)) };
+      });
+    }
+    function computeMACD(data, f=12,s=26) {
+      const ema=(vals,n)=>{
+        const k=2/(n+1);
+        let ema=vals.slice(0,n).reduce((a,b)=>a+b,0)/n, out=[];
+        for(let i=0;i<vals.length;i++){
+          ema = i===0? vals[0]: (vals[i]*k + ema*(1-k));
+          out.push(ema);
+        }
+        return out;
+      };
+      const closes=data.map(d=>d.close);
+      const fast=ema(closes,f), slow=ema(closes,s);
+      return data.map((d,i)=>({
+        date:d.date, macd: fast[i]-slow[i]
+      }));
+    }
+    function linReg(data){
+      const n=data.length, x=data.map((_,i)=>i), y=data.map(d=>d.close);
+      const sx=x.reduce((a,b)=>a+b,0), sy=y.reduce((a,b)=>a+b,0);
+      const sxx=x.map(a=>a*a).reduce((a,b)=>a+b,0);
+      const sxy=x.map((a,i)=>a*y[i]).reduce((a,b)=>a+b,0);
+      const m=(n*sxy-sx*sy)/(n*sxx-sx*sx);
+      const b=(sy-m*sx)/n;
+      return data.map((d,i)=>({ date:d.date, pred: b+m*i }));
+    }
+
+    // Chart vars
+    let root, chart,
+        xAxis, yAxis,
+        lineSeries, candleSeries, volumeSeries,
+        smaSeries, rsiSeries, macdSeries, predSeries;
+
+    am5.ready(function() {
+      // Root & theme
+      root = am5.Root.new("chartdiv");
+      root.setThemes([ am5themes_Animated.new(root) ]);
+
+      // Chart
+      chart = root.container.children.push(
+        am5xy.XYChart.new(root,{
+          panX:true, panY:true,
+          wheelX:"panX", wheelY:"zoomX",
+          layout: root.verticalLayout,
+          paddingRight:20
+        })
+      );
+
+      // Category X axis
+      xAxis = chart.xAxes.push(
+        am5xy.CategoryAxis.new(root,{
+          categoryField:"date",
+          renderer:am5xy.AxisRendererX.new(root,{
+            minGridDistance:25,
+            stroke:am5.color(0x666666)
+          })
+        })
+      );
+      xAxis.get("renderer").labels.template.setAll({
+        rotation:-45, centerY:am5.p50, centerX:am5.p100,
+        fill:am5.color(0x333333)
+      });
+      xAxis.setAll({ startLocation:0, endLocation:1 });
+
+      // Value Y axis
+      yAxis = chart.yAxes.push(
+        am5xy.ValueAxis.new(root,{
+          renderer:am5xy.AxisRendererY.new(root,{
+            stroke:am5.color(0x666666)
+          })
+        })
+      );
+      yAxis.get("renderer").labels.template.setAll({ fill:am5.color(0x333333) });
+
+      // Line series (close)
+      lineSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"Close Price",
+          xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"close",
+          stroke:am5.color(0x28a745),
+          fill:am5.color(0xe6f4ea),
+          tooltip:am5.Tooltip.new(root,{ labelText:"{valueY}" })
+        })
+      );
+      lineSeries.strokes.template.setAll({ strokeWidth:3 });
+      lineSeries.fills.template.setAll({ fillOpacity:0.3 });
+      lineSeries.setAll({ startLocation:0, endLocation:1 });
+
+      // Candlestick series
+      candleSeries = chart.series.push(
+        am5xy.CandlestickSeries.new(root,{
+          name:"Candlestick",
+          xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date",
+          openValueYField:"open",
+          highValueYField:"high",
+          lowValueYField:"low",
+          valueYField:"close",
+          tooltip:am5.Tooltip.new(root,{
+            labelText:"O:{openValueY}\nH:{highValueY}\nL:{lowValueY}\nC:{valueY}"
+          })
+        })
+      );
+      candleSeries.set("hidden", true);
+      candleSeries.setAll({ startLocation:0, endLocation:1 });
+
+      // Volume series (column)
+      volumeSeries = chart.series.push(
+        am5xy.ColumnSeries.new(root,{
+          name:"Volume",
+          xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"volume",
+          clustered:false, tooltip:am5.Tooltip.new(root,{
+            labelText:"{valueY}"
+          })
+        })
+      );
+      volumeSeries.columns.template.setAll({ fill:am5.color(0x888888), fillOpacity:0.3 });
+      volumeSeries.set("hidden", true);
+
+      // SMA series
+      smaSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"10-Day SMA",
+          xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"sma",
+          stroke:am5.color(0xffa500), strokeDasharray:[4,4], strokeWidth:2
+        })
+      );
+      smaSeries.setAll({ startLocation:0, endLocation:1 });
+
+      // RSI series (hidden by default)
+      rsiSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"RSI(14)",
+          xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"rsi",
+          stroke:am5.color(0x6f42c1), strokeDasharray:[2,2], strokeWidth:2
+        })
+      );
+      rsiSeries.setAll({ startLocation:0, endLocation:1 });
+      rsiSeries.set("hidden", true);
+
+      // MACD series
+      macdSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"MACD",
+          xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"macd",
+          stroke:am5.color(0xdc3545), strokeWidth:2
+        })
+      );
+      macdSeries.setAll({ startLocation:0, endLocation:1 });
+      macdSeries.set("hidden", true);
+
+      // Prediction series
+      predSeries = chart.series.push(
+        am5xy.LineSeries.new(root,{
+          name:"Prediction",
+          xAxis:xAxis, yAxis:yAxis,
+          categoryXField:"date", valueYField:"pred",
+          stroke:am5.color(0x17a2b8), strokeDasharray:[3,3], strokeWidth:2
+        })
+      );
+      predSeries.setAll({ startLocation:0, endLocation:1 });
+      predSeries.set("hidden", true);
+
+      // Legend
+      let legend = chart.children.push(
+        am5.Legend.new(root,{
+          centerX:am5.p50, x:am5.p50, marginTop:15
+        })
+      );
+      legend.data.setAll([
+        lineSeries, candleSeries, volumeSeries,
+        smaSeries, rsiSeries, macdSeries, predSeries
+      ]);
+
+      // Cursor
+      chart.set("cursor", am5xy.XYCursor.new(root,{ behavior:"zoomXY" }));
+
+      // Initial load
+      updateChart();
+    });
+
+    // Update chart and indicators
+    async function updateChart(){
+      const sym = document.getElementById("symbolInput").value.trim()||"AAPL";
+      try {
+        const raw = await fetchFMP(sym);
+        // set raw data
+        xAxis.data.setAll(raw);
+        lineSeries.data.setAll(raw);
+        candleSeries.data.setAll(raw);
+        volumeSeries.data.setAll(raw);
+
+        // indicators
+        const sma = computeSMA(raw,10);
+        smaSeries.data.setAll(sma);
+        const rsi = computeRSI(raw,14);
+        rsiSeries.data.setAll(rsi);
+        const macd = computeMACD(raw,12,26);
+        macdSeries.data.setAll(macd);
+        const pred = linReg(raw);
+        predSeries.data.setAll(pred);
+
+        // ensure visibility
+        candleSeries.hide();    // default line view
+        volumeSeries.hide();
+        rsiSeries.hide();
+        macdSeries.hide();
+        predSeries.hide();
+
+        chart.zoomOut();
+      } catch(e) {
+        alert("خطأ في جلب البيانات: " + e.message);
+        console.error(e);
+      }
+    }
+
+    // Button handlers
+    document.getElementById("searchBtn")
+      .addEventListener("click", updateChart);
+    document.getElementById("toggleChartType")
+      .addEventListener("click", () => candleSeries.toggleHidden());
+    document.getElementById("drawSupport")
+      .addEventListener("click", ()=>{/* implement drawing support line */});
+    document.getElementById("drawResistance")
+      .addEventListener("click", ()=>{/* implement drawing resistance */});
+    document.getElementById("addBuy")
+      .addEventListener("click", ()=>{/* add buy marker */});
+    document.getElementById("addSell")
+      .addEventListener("click", ()=>{/* add sell marker */});
+    document.getElementById("togglePred")
+      .addEventListener("click", ()=> predSeries.toggleHidden());
+  </script>
+</body>
+</html>
