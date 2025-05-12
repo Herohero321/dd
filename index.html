@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Stock Market Analyzer (Light Theme)</title>
+  <title>Stock Market Analyzer</title>
   <style>
     /* Reset & Base */
     * { box-sizing: border-box; margin:0; padding:0 }
@@ -71,12 +71,9 @@
   <main>
     <div id="chartdiv"></div>
     <div class="controls-bottom">
-      <button id="toggleChartType" class="btn btn-secondary">Toggle Candlestick</button>
-      <button id="drawSupport"     class="btn btn-secondary">Draw Support Line</button>
-      <button id="drawResistance"  class="btn btn-secondary">Draw Resistance Line</button>
-      <button id="addBuy"          class="btn btn-secondary">Add Buy Marker</button>
-      <button id="addSell"         class="btn btn-secondary">Add Sell Marker</button>
-      <button id="togglePred"      class="btn btn-secondary">Show Prediction</button>
+
+
+
     </div>
   </main>
 
@@ -337,7 +334,7 @@
 
         chart.zoomOut();
       } catch(e) {
-        alert("خطأ في جلب البيانات: " + e.message);
+        alert("no data" + e.message);
         console.error(e);
       }
     }
@@ -345,18 +342,6 @@
     // Button handlers
     document.getElementById("searchBtn")
       .addEventListener("click", updateChart);
-    document.getElementById("toggleChartType")
-      .addEventListener("click", () => candleSeries.toggleHidden());
-    document.getElementById("drawSupport")
-      .addEventListener("click", ()=>{/* implement drawing support line */});
-    document.getElementById("drawResistance")
-      .addEventListener("click", ()=>{/* implement drawing resistance */});
-    document.getElementById("addBuy")
-      .addEventListener("click", ()=>{/* add buy marker */});
-    document.getElementById("addSell")
-      .addEventListener("click", ()=>{/* add sell marker */});
-    document.getElementById("togglePred")
-      .addEventListener("click", ()=> predSeries.toggleHidden());
   </script>
 </body>
 </html>
